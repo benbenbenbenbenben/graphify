@@ -19,3 +19,8 @@ graphify-out/
 .claude/
 skills/
 docs/superpowers/
+
+
+# Added by cargo
+
+/target
