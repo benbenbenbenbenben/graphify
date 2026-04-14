@@ -1,4 +1,4 @@
-use crate::validate::{validate_extraction, Extraction, ValidationError};
+use crate::validate::{validate_extraction, Extraction};
 use petgraph::graph::{Graph, NodeIndex};
 use std::collections::HashMap;
 
@@ -27,7 +27,7 @@ pub type MyGraph = Graph<GraphNode, GraphEdge, petgraph::Undirected>;
 pub fn build_from_json(extraction: &Extraction) -> MyGraph {
     let errors = validate_extraction(extraction);
     let real_errors: Vec<_> = errors.into_iter()
-        .filter(|e| !matches!(e, ValidationError::DanglingSource { .. } | ValidationError::DanglingTarget { .. }))
+        .filter(|e| !e.to_string().contains("does not match any node id"))
         .collect();
 
     if !real_errors.is_empty() {
