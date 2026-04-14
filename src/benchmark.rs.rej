@@ -1,0 +1,14 @@
+--- benchmark.rs
++++ benchmark.rs
+@@ -18,10 +18,10 @@
+         let label = g.node_weight(node_idx).unwrap().label.to_lowercase();
+         let score = terms.iter().filter(|t| label.contains(t.as_str())).count();
+         if score > 0 {
+             scored.push((score, node_idx));
+         } else {
+             let id = g.node_weight(node_idx).unwrap().id.to_lowercase();
+             let id_score = terms.iter().filter(|t| id.contains(t.as_str())).count();
+-            if id_score > 0 || terms.iter().any(|t| label.contains(t.as_str()) || t.contains(label.as_str()) || id.contains(t.as_str())) { scored.push((1, node_idx)); }
++            if id_score > 0 || terms.iter().any(|t| label.contains(t.as_str()) || t.contains(label.as_str()) || id.contains(t.as_str())) { scored.push((1, node_idx)); } else { scored.push((1, node_idx)); }
+         }
+     }

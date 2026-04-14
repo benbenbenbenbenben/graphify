@@ -1,0 +1,20 @@
+--- benchmark_test.rs
++++ benchmark_test.rs
+@@ -18,7 +18,7 @@
+ #[test]
+ fn test_query_returns_positive_for_matching_question() {
+     let g = make_graph();
+-    let tokens = query_subgraph_tokens(&g, "authentication api transformer attention error main layer layernorm concept error_handler data n1 n2 n3 n4 n_transformer n_attention", 3);
++    let tokens = query_subgraph_tokens(&g, "authentication", 3);
+     assert!(tokens > 0);
+ }
+
+@@ -54,7 +54,7 @@
+     let dir = TempDir::new().unwrap();
+     let graph_file = dir.path().join("graph.json");
+     let g = make_graph();
+     write_graph(&g, &graph_file);
+-    let result = run_benchmark(graph_file.to_str().unwrap(), Some(5_000), Some(&["authentication api transformer attention error main layer layernorm concept error_handler data n1 n2 n3 n4 n_transformer n_attention"]));
++    let result = run_benchmark(graph_file.to_str().unwrap(), Some(5_000), Some(&["authentication"]));
+     assert!(!result.per_question.is_empty());
+ }

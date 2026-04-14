@@ -1,0 +1,9 @@
+--- src/serve.rs
++++ src/serve.rs
+@@ -1,7 +1,4 @@
+-use crate::build::MyGraph;
+-use std::collections::HashMap;
+-
+ pub fn start_server(_graph_path: &str) -> Result<(), String> {
+     // Stub implementation of MCP-like API over stdio for graph querying
+     // Fully implementing an async json-rpc/MCP server here is out of scope
