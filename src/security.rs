@@ -41,12 +41,27 @@ pub enum SecurityError {
 fn is_private_or_internal(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(ipv4) => {
-            ipv4.is_private() || ipv4.is_loopback() || ipv4.is_link_local()
-                || ipv4.octets()[0] == 100 && (ipv4.octets()[1] & 0b1100_0000 == 0b0100_0000) // Carrier-grade NAT
+            let octets = ipv4.octets();
+            ipv4.is_private()
+                || ipv4.is_loopback()
+                || ipv4.is_link_local()
+                || ipv4.is_unspecified()
+                || ipv4.is_multicast()
+                || ipv4.is_broadcast()
+                // Carrier-grade NAT (100.64.0.0/10)
+                || (octets[0] == 100 && (octets[1] & 0b1100_0000 == 0b0100_0000))
+                // Reserved / future use (240.0.0.0/4 and 0.0.0.0/8)
+                || octets[0] >= 240
+                || octets[0] == 0
         }
         IpAddr::V6(ipv6) => {
-            ipv6.is_loopback() || (ipv6.segments()[0] & 0xffc0) == 0xfe80 // Link-local
-                || (ipv6.segments()[0] & 0xfe00) == 0xfc00 // Unique local
+            ipv6.is_loopback()
+                || ipv6.is_unspecified()
+                || ipv6.is_multicast()
+                // Link-local (fe80::/10)
+                || (ipv6.segments()[0] & 0xffc0) == 0xfe80
+                // Unique local (fc00::/7)
+                || (ipv6.segments()[0] & 0xfe00) == 0xfc00
         }
     }
 }
@@ -120,17 +135,18 @@ pub fn safe_fetch_text(url: &str, max_bytes: usize) -> Result<String, SecurityEr
 pub fn validate_graph_path(path: &Path, base: Option<&Path>) -> Result<PathBuf, SecurityError> {
     let base_path = base.unwrap_or(Path::new("graphify-out")).to_path_buf();
 
-    let abs_base = std::fs::canonicalize(&base_path).unwrap_or(base_path.clone());
-    if !abs_base.exists() {
-        return Err(SecurityError::BaseDoesNotExist(abs_base.to_string_lossy().into_owned()));
-    }
+    let abs_base = std::fs::canonicalize(&base_path).map_err(|_| {
+        SecurityError::BaseDoesNotExist(base_path.to_string_lossy().into_owned())
+    })?;
 
-    let mut abs_path = if path.is_absolute() {
+    let abs_path = if path.is_absolute() {
         path.to_path_buf()
     } else {
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(path)
     };
 
+    // Normalize by resolving ".." components (without canonicalization) so that
+    // directory-traversal attempts like "base/../secret" are caught before any I/O.
     let mut resolved = PathBuf::new();
     for comp in abs_path.components() {
         if comp.as_os_str() == ".." {
@@ -140,6 +156,7 @@ pub fn validate_graph_path(path: &Path, base: Option<&Path>) -> Result<PathBuf, 
         }
     }
 
+    // Reject paths that escape the base directory even before the file exists.
     if !resolved.starts_with(&abs_base) {
         return Err(SecurityError::PathEscapesBase);
     }
@@ -148,7 +165,14 @@ pub fn validate_graph_path(path: &Path, base: Option<&Path>) -> Result<PathBuf, 
         return Err(SecurityError::FileNotFound(resolved.to_string_lossy().into_owned()));
     }
 
-    Ok(resolved)
+    // Canonicalize *after* the existence check to resolve symlinks and catch
+    // symlink-based escape attempts that bypass the lexical check above.
+    let canonical = std::fs::canonicalize(&resolved)?;
+    if !canonical.starts_with(&abs_base) {
+        return Err(SecurityError::PathEscapesBase);
+    }
+
+    Ok(canonical)
 }
 
 pub fn sanitize_label(text: &str) -> String {

@@ -29,6 +29,8 @@ pub const CORPUS_WARN_THRESHOLD: usize = 50_000;
 pub const CORPUS_UPPER_THRESHOLD: usize = 500_000;
 pub const FILE_COUNT_UPPER: usize = 200;
 pub const MANIFEST_PATH: &str = "graphify-out/manifest.json";
+/// Estimated bytes per word used for binary file word count approximation (PDF, DOCX, XLSX, etc.).
+const BYTES_PER_WORD_ESTIMATE: usize = 5;
 
 lazy_static::lazy_static! {
     static ref SENSITIVE_PATTERNS: Vec<Regex> = vec![
@@ -115,11 +117,18 @@ pub fn classify_file(path: &Path) -> Option<FileType> {
 }
 
 pub fn count_words(path: &Path) -> usize {
+    // For text-based files, count whitespace-delimited tokens directly.
     if let Ok(text) = fs::read_to_string(path) {
-        text.split_whitespace().count()
-    } else {
-        0
+        return text.split_whitespace().count();
     }
+
+    // For binary formats (PDF, DOCX, XLSX, etc.) that cannot be read as UTF-8,
+    // estimate word count from file size.
+    if let Ok(meta) = fs::metadata(path) {
+        return (meta.len() as usize) / BYTES_PER_WORD_ESTIMATE;
+    }
+
+    0
 }
 
 fn is_noise_dir(part: &str) -> bool {
@@ -207,40 +216,29 @@ pub fn detect(root: &Path, follow_symlinks: bool) -> DetectResult {
 
     for scan_root in scan_paths {
         let in_memory_tree = memory_dir.exists() && scan_root.starts_with(&memory_dir);
-        let mut walker = WalkDir::new(&scan_root).follow_links(follow_symlinks);
 
-        let it = walker.into_iter();
+        let it = WalkDir::new(&scan_root)
+            .follow_links(follow_symlinks)
+            .into_iter()
+            .filter_entry(|entry| {
+                // Always include the root entry (depth 0) and all non-directory entries.
+                if in_memory_tree || !entry.file_type().is_dir() || entry.depth() == 0 {
+                    return true;
+                }
+                let p = entry.path();
+                let name = entry.file_name().to_string_lossy();
+                !(name.starts_with('.') || is_noise_dir(&name) || is_ignored(p, root, &ignore_patterns))
+            });
+
         for entry in it.filter_map(|e| e.ok()) {
             let p = entry.path();
-            if entry.file_type().is_dir() {
-                if !in_memory_tree {
-                    let name = entry.file_name().to_string_lossy();
-                    if name.starts_with('.') || is_noise_dir(&name) || is_ignored(p, root, &ignore_patterns) {
-                        // In a real implementation we'd prune the traversal here.
-                        // WalkDir does this via filter_entry, but for simplicity we skip.
-                    }
-                }
-            } else if entry.file_type().is_file() || entry.file_type().is_symlink() {
-                let mut valid = true;
-                if !in_memory_tree {
-                    for ancestor in p.ancestors() {
-                        if ancestor == root { break; }
-                        let name = ancestor.file_name().unwrap_or_default().to_string_lossy();
-                        if name.starts_with('.') || is_noise_dir(&name) || is_ignored(ancestor, root, &ignore_patterns) {
-                            valid = false;
-                            break;
-                        }
-                    }
-                }
-
-                if valid {
-                    if let Ok(canon) = std::fs::canonicalize(p) {
-                        if seen.insert(canon) {
-                            all_files.push(p.to_path_buf());
-                        }
-                    } else if seen.insert(p.to_path_buf()) {
+            if entry.file_type().is_file() || entry.file_type().is_symlink() {
+                if let Ok(canon) = std::fs::canonicalize(p) {
+                    if seen.insert(canon) {
                         all_files.push(p.to_path_buf());
                     }
+                } else if seen.insert(p.to_path_buf()) {
+                    all_files.push(p.to_path_buf());
                 }
             }
         }
@@ -311,10 +309,24 @@ pub fn save_manifest(files: &HashMap<String, Vec<String>>, manifest_path: &str) 
         }
     }
     if let Some(parent) = Path::new(manifest_path).parent() {
-        fs::create_dir_all(parent).unwrap_or_default();
+        if let Err(err) = fs::create_dir_all(parent) {
+            eprintln!(
+                "Failed to create manifest directory '{}': {}",
+                parent.display(),
+                err
+            );
+            return;
+        }
     }
-    if let Ok(json) = serde_json::to_string_pretty(&manifest) {
-        let _ = fs::write(manifest_path, json);
+    let json = match serde_json::to_string_pretty(&manifest) {
+        Ok(json) => json,
+        Err(err) => {
+            eprintln!("Failed to serialize manifest '{}': {}", manifest_path, err);
+            return;
+        }
+    };
+    if let Err(err) = fs::write(manifest_path, json) {
+        eprintln!("Failed to write manifest '{}': {}", manifest_path, err);
     }
 }
 

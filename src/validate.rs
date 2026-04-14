@@ -98,3 +98,72 @@ pub fn validate_extraction(extraction: &Extraction) -> Vec<ValidationError> {
 
     errors
 }
+
+/// Validate a raw `serde_json::Value`, matching the Python API `validate_extraction(data: dict)`.
+///
+/// Unlike `validate_extraction`, this function detects missing required fields and a
+/// non-object top-level value, producing `MissingNodeField` / `MissingEdgeField` /
+/// `NotAnObject` errors that would otherwise surface as serde parse failures.
+pub fn validate_extraction_value(value: &serde_json::Value) -> Vec<ValidationError> {
+    use serde_json::Value;
+
+    let obj = match value.as_object() {
+        Some(o) => o,
+        None => return vec![ValidationError::NotAnObject],
+    };
+
+    let mut errors = Vec::new();
+    let valid_file_types: HashSet<&str> = ["code", "document", "paper", "image", "rationale"].into_iter().collect();
+    let valid_confidences: HashSet<&str> = ["EXTRACTED", "INFERRED", "AMBIGUOUS"].into_iter().collect();
+
+    const NODE_REQUIRED: &[&str] = &["id", "label", "file_type", "source_file"];
+    const EDGE_REQUIRED: &[&str] = &["source", "target", "relation", "confidence", "source_file"];
+
+    let mut node_ids: HashSet<String> = HashSet::new();
+
+    let nodes = obj.get("nodes").and_then(Value::as_array).map(|a| a.as_slice()).unwrap_or(&[]);
+    for (i, node) in nodes.iter().enumerate() {
+        let id = node.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+        for &field in NODE_REQUIRED {
+            if node.get(field).map_or(true, |v| v.is_null()) {
+                errors.push(ValidationError::MissingNodeField { index: i, id: id.clone(), field: field.to_string() });
+            }
+        }
+        if !id.is_empty() {
+            node_ids.insert(id.clone());
+        }
+        if let Some(ft) = node.get("file_type").and_then(Value::as_str) {
+            if !valid_file_types.contains(ft) {
+                errors.push(ValidationError::InvalidFileType { index: i, id: id.clone(), file_type: ft.to_string() });
+            }
+        }
+    }
+
+    let edges = obj.get("edges").and_then(Value::as_array).map(|a| a.as_slice()).unwrap_or(&[]);
+    for (i, edge) in edges.iter().enumerate() {
+        for &field in EDGE_REQUIRED {
+            if edge.get(field).map_or(true, |v| v.is_null()) {
+                errors.push(ValidationError::MissingEdgeField { index: i, field: field.to_string() });
+            }
+        }
+        if let Some(conf) = edge.get("confidence").and_then(Value::as_str) {
+            if !valid_confidences.contains(conf) {
+                errors.push(ValidationError::InvalidConfidence { index: i, confidence: conf.to_string() });
+            }
+        }
+        if !node_ids.is_empty() {
+            if let Some(src) = edge.get("source").and_then(Value::as_str) {
+                if !node_ids.contains(src) {
+                    errors.push(ValidationError::DanglingSource { index: i, source_id: src.to_string() });
+                }
+            }
+            if let Some(tgt) = edge.get("target").and_then(Value::as_str) {
+                if !node_ids.contains(tgt) {
+                    errors.push(ValidationError::DanglingTarget { index: i, target: tgt.to_string() });
+                }
+            }
+        }
+    }
+
+    errors
+}
